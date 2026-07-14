@@ -56,6 +56,14 @@ EXTERNAL_CAMERA_CONFIGS = {
         "orientation": VIEWER_CAMERA_ORN,
         "horizontal_aperture": 15.0,
     },
+    # Second viewpoint, generated via scripts/gen_camera_poses.py: rotated 60deg
+    # around the vertical axis through sensor_0's inferred look-at target
+    # (same height/aperture), to match PointWorld's 2-camera droid training data.
+    "external_sensor_1": {
+        "position": [5.9529, -0.3320, 1.3961],
+        "orientation": [0.1747, 0.5902, 0.7557, 0.2237],
+        "horizontal_aperture": 15.0,
+    },
 }
 INIT_STATE_PATH = "oopsiebench/envs/behavior1k/init_states/fill_bowl.pkl"
 

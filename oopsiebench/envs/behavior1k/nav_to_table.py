@@ -82,6 +82,25 @@ EXTERNAL_CAMERA_CONFIGS = {
         "horizontal_aperture": 20.995,  # matches the OG viewer FOV
         "world_fixed": True,
     },
+    # Two more stationary viewpoints, generated via scripts/gen_camera_poses.py:
+    # rotated +-60deg around the vertical axis through sensor_0's inferred
+    # look-at target (same height/aperture), to match PointWorld's 3-camera
+    # behavior training data. world_fixed=True is required here (unlike the
+    # fixed-base Franka scenarios) since Tiago's base moves during the
+    # episode -- without it these would be parented to base_link and ride
+    # along with the robot instead of staying put.
+    "external_sensor_1": {
+        "position": [2.7406, -0.9182, 1.3117],
+        "orientation": [0.5031, 0.3668, 0.4610, 0.6323],
+        "horizontal_aperture": 20.995,
+        "world_fixed": True,
+    },
+    "external_sensor_2": {
+        "position": [-1.9813, -2.1673, 1.3117],
+        "orientation": [0.5973, -0.1758, -0.2210, 0.7507],
+        "horizontal_aperture": 20.995,
+        "world_fixed": True,
+    },
 }
 
 # ── Public entry point ───────────────────────────────────────────────────

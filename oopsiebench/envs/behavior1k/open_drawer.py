@@ -34,11 +34,19 @@ VIEWER_CAMERA_POS = [-0.723876953125, 1.1376675367355347, 0.8660104274749756]
 VIEWER_CAMERA_ORN = [0.12347061932086945, 0.6302758455276489, 0.7521961331367493, 0.14733760058879852]
 
 EXTERNAL_CAMERA_CONFIGS = {
-        "external_sensor_0": {
+    "external_sensor_0": {
         "position": VIEWER_CAMERA_POS,
         "orientation": VIEWER_CAMERA_ORN,
         "horizontal_aperture": 20.0,
-    }
+    },
+    # Second viewpoint, generated via scripts/gen_camera_poses.py: rotated 60deg
+    # around the vertical axis through sensor_0's inferred look-at target
+    # (same height/aperture), to match PointWorld's 2-camera droid training data.
+    "external_sensor_1": {
+        "position": [-2.2064, 0.9337, 0.8660],
+        "orientation": [-0.2082, 0.6076, 0.7251, -0.2485],
+        "horizontal_aperture": 20.0,
+    },
 }
 
 _U_XY = 0.03

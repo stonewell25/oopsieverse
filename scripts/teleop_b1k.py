@@ -13,11 +13,12 @@ Usage:
     python scripts/teleop_b1k.py --task_name shelve_item \\
         --collect_hdf5_path demos/behavior1k/teleop_data/shelve_item.hdf5 --n_episodes 5
 
-Keys:
-    TAB       — end current episode (resets env, starts next episode)
+Keys (press in the viewer window):
+    K         — end current episode (flush to HDF5 after ENTER, then next episode)
+    ENTER     — continue while paused (start episode / confirm save)
     ESC       — quit (saves completed episodes to HDF5; discards in-progress)
     BACKSPACE — discard current trajectory and start over (no save, no count)
-    S         — save serialized state to init_states and breakpoint
+    TAB       — print viewer camera pose and breakpoint (debug)
 """
 
 from __future__ import annotations
@@ -80,12 +81,14 @@ TASK_REGISTRY = {
     "heat_saucepot": "heat_saucepot",
     "open_single_door": "open_single_door",
     "food_in_microwave": "food_in_microwave",
+    "towel_fire": "towel_fire",
 }
 
 # Global variables for teleop
 QUIT_REQUESTED = [False]
 EPISODE_DONE = [False]
 DISCARD_REQUESTED = [False]
+START_REQUESTED = [False]
 
 VIDEO_CAMERA_TYPE = "external"
 VIDEO_CAMERA_NAME = "external_sensor0"
@@ -146,6 +149,18 @@ def load_state_from_pkl(env, task_name: str, task_module=None, *, run_task_reset
 
     if run_task_reset and task_module is not None and hasattr(task_module, "reset") and callable(task_module.reset):
         task_module.reset(env)
+
+
+def wait_for_enter():
+    """Pause until ENTER is pressed in the viewer (ESC quits instead).
+
+    Keeps pumping render/UI events while paused — parking the main thread in a
+    pdb breakpoint stalls the Kit main loop, which can segfault the native
+    renderer.
+    """
+    START_REQUESTED[0] = False
+    while not (START_REQUESTED[0] or QUIT_REQUESTED[0]):
+        og.sim.render()
 
 
 def build_env_config(task_cfg):
@@ -627,6 +642,9 @@ class TeleopWrapper:
         def on_backspace():
             DISCARD_REQUESTED[0] = True
 
+        def on_start():
+            START_REQUESTED[0] = True
+
         def do_reset():
             reset_env(self.env, self.task_cfg, self.task_mod)
 
@@ -656,6 +674,11 @@ class TeleopWrapper:
             key=Ki.BACKSPACE,
             description="Discard current trajectory and start over (no save)",
             callback_fn=on_backspace,
+        )
+        keyboard_interface.register_custom_keymapping(
+            key=Ki.ENTER,
+            description="Continue while paused (start episode / confirm save)",
+            callback_fn=on_start,
         )
 
         keyboard_interface.register_custom_keymapping(
@@ -894,12 +917,12 @@ def main():
     while completed_episodes < n_episodes:
         print("\n" + "="*80)
         print(f"[TELEOP] Running episode {completed_episodes + 1}/{n_episodes}…")
-        print("Press TAB to end an episode (and save if save_to_hdf5 is True), "
+        print("Press K to end an episode (and save if save_to_hdf5 is True), "
               "ESC to quit (discards in-progress), BACKSPACE to discard and restart.")
-        print("Press c to continue")
+        print("Press ENTER in the viewer window to start the episode")
         print("="*80 + "\n")
         teleop_wrapper.reset_teleop_wrapper()
-        breakpoint()
+        wait_for_enter()
                 
         # Loop through steps of the current episode
         while True:
@@ -920,7 +943,7 @@ def main():
                     if args.save_video:
                         teleop_wrapper.record_step(obs, info)
                 print(f"[TELEOP] Task completed. Ending episode.")
-                EPISODE_DONE[0] = True
+                EPISODE_DONE[0] = True # True: Task finishing automatically
                 break
 
         if QUIT_REQUESTED[0]:
@@ -935,7 +958,8 @@ def main():
             DISCARD_REQUESTED[0] = False
 
         if EPISODE_DONE[0]:
-            breakpoint()
+            print("[TELEOP] Episode done. Press ENTER in the viewer to save & continue…")
+            wait_for_enter()
             teleop_wrapper.on_episode_done()
 
             completed_episodes += 1

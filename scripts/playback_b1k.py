@@ -53,6 +53,7 @@ from omnigibson.macros import gm
 from damagesim.omnigibson.damageable_env import (
     OGDamageableDataPlaybackWrapper,
 )
+from damagesim.omnigibson.pointworld_export import PointWorldRecorder
 
 # ── Task-config registry ────────────────────────────────────────────────
 
@@ -73,6 +74,7 @@ TASK_REGISTRY: Dict[str, str] = {
     "heat_saucepot": "oopsiebench.envs.behavior1k.heat_saucepot",
     "open_single_door": "oopsiebench.envs.behavior1k.open_single_door",
     "food_in_microwave": "oopsiebench.envs.behavior1k.food_in_microwave",
+    "towel_fire": "oopsiebench.envs.behavior1k.towel_fire",
 }
 
 
@@ -115,6 +117,7 @@ def build_external_sensors_config(
     robot_type: str,
     image_height: int = 256,
     image_width: int = 256,
+    modalities: Optional[List[str]] = None,
 ):
     """
     Build the list-of-dicts ``external_sensors_config`` expected by
@@ -122,13 +125,16 @@ def build_external_sensors_config(
     """
     import torch as th
 
+    if modalities is None:
+        modalities = ["rgb", "seg_instance"]
+
     sensors = []
     for name, cam_cfg in task_cfg.external_camera_configs.items():
         idx = name.split("_")[-1]
         sensor = {
             "sensor_type": "VisionSensor",
             "name": f"external_sensor{idx}",
-            "modalities": ["rgb", "seg_instance"],
+            "modalities": list(modalities),
             "sensor_kwargs": {
                 "image_height": image_height,
                 "image_width": image_width,
@@ -340,15 +346,24 @@ def run_playback(args, task_cfg, task_mod):
     robot_name = task_cfg.robot_name
     robot_type = task_cfg.robot_type
 
+    export_pointworld = getattr(args, "export_pointworld_dir", None) is not None
+    export_joints_only = getattr(args, "export_joints_only", False)
+
     robot_sensor_config, external_sensors_config = None, None
     if not args.skip_save_images:
-        if not args.low_resolution:
+        if getattr(args, "export_resolution", None):
+            image_h, image_w = args.export_resolution
+        elif not args.low_resolution:
             image_h, image_w = 720, 720
         else:
             image_h, image_w = 256, 256
 
+        cam_modalities = ["rgb", "seg_instance"]
+        if export_pointworld and not export_joints_only:
+            cam_modalities.append("depth_linear")
+
         external_sensors_config = build_external_sensors_config(
-            task_cfg, robot_name, robot_type, image_h, image_w,
+            task_cfg, robot_name, robot_type, image_h, image_w, modalities=cam_modalities,
         )
 
         robot_sensor_config = {
@@ -396,7 +411,30 @@ def run_playback(args, task_cfg, task_mod):
 
     # Run playback
     demo_ids = args.demo_ids if args.demo_ids else None
-    env.playback_dataset(record_data=True, demo_ids=demo_ids)
+
+    if export_pointworld:
+        camera_names = [f"external_sensor{name.split('_')[-1]}" for name in task_cfg.external_camera_configs]
+        source_tag = os.path.splitext(os.path.basename(args.source_hdf5_path))[0]
+        recorder = PointWorldRecorder(
+            env=env,
+            out_dir=args.export_pointworld_dir,
+            task_name=args.task_name,
+            stride=args.export_stride,
+            camera_names=camera_names,
+            joints_only=export_joints_only,
+            source_tag=source_tag,
+            checkpoint_every=args.export_checkpoint_every,
+        )
+        env.pointworld_recorder = recorder
+
+        ids = demo_ids if demo_ids is not None else range(env.input_hdf5["data"].attrs["n_episodes"])
+        for episode_id in ids:
+            recorder.on_episode_start(episode_id)
+            env.playback_episode(episode_id=episode_id, record_data=True, save_images=not args.skip_save_images)
+            recorder.finalize()
+    else:
+        env.playback_dataset(record_data=True, demo_ids=demo_ids)
+
     env.save_data()
 
     print(f"Playback complete.  Output → {args.playback_hdf5_path}")
@@ -643,7 +681,25 @@ def parse_args():
     parser.add_argument("--camera_name", type=str, default="external_sensor0", help="Camera for visualisation.")
     parser.add_argument("--skip_save_images", action="store_true", help="Save images from playback.")
 
-    return parser.parse_args()
+    # PointWorld export
+    parser.add_argument("--export_pointworld_dir", type=str, default=None,
+                         help="If set, export each played-back episode to a .npz in this dir for the PointWorld bridge.")
+    parser.add_argument("--export_stride", type=int, default=3,
+                         help="Export every Nth playback step (default 3).")
+    parser.add_argument("--export_resolution", type=int, nargs=2, default=None, metavar=("HEIGHT", "WIDTH"),
+                         help="Camera resolution for PointWorld export, e.g. --export_resolution 720 1280.")
+    parser.add_argument("--export_joints_only", action="store_true",
+                         help="Fast export path: joint/eef/health only, no images (use with --skip_save_images).")
+    parser.add_argument("--export_checkpoint_every", type=int, default=None,
+                         help="If set, overwrite the export .npz with the buffered data every N recorded frames. "
+                              "Playback can segfault unpredictably as steps pile up (native Isaac Sim memory growth, "
+                              "not tied to a specific step), which Python can't catch, so this is the only way to "
+                              "guarantee a usable partial export survives a hard crash.")
+
+    args = parser.parse_args()
+    if args.export_resolution is not None:
+        args.export_resolution = tuple(args.export_resolution)
+    return args
 
 
 def main():

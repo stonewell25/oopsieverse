@@ -345,7 +345,7 @@ def setup_viewport_layout(
             w.visible = False
 
     vp1 = ui.Workspace.get_window("Viewport 1")
-    vp1.visible = False
+    vp1.visible = True
     vp = ui.Workspace.get_window("Viewport")
     vp.height = 890
     vp.width = 1430

@@ -977,6 +977,10 @@ class OGDamageableDataPlaybackWrapper(DataPlaybackWrapper):
             self.current_obs, _, _, _, info = self.env.step(action=a, n_render_iterations=self.n_render_iterations, episode_step_count=i, playback=True, init_skip_steps=self.init_skip_steps)
             self._run_task_playback_step()
             self.fix_fire_emitter_positions()
+
+            if i > self.init_skip_steps and getattr(self, "pointworld_recorder", None) is not None:
+                self.pointworld_recorder.on_step(i, self.current_obs, info)
+
             # If recording, record data
             if record_data and i > self.init_skip_steps:
                 # for link_name in info["damage_info"]["franka0"]:

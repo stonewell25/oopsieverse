@@ -60,6 +60,14 @@ EXTERNAL_CAMERA_CONFIGS = {
         "orientation": VIEWER_CAMERA_ORN,
         "horizontal_aperture": 15.0,
     },
+    # Second viewpoint, generated via scripts/gen_camera_poses.py: rotated 60deg
+    # around the vertical axis through sensor_0's inferred look-at target
+    # (same height/aperture), to match PointWorld's 2-camera droid training data.
+    "external_sensor_1": {
+        "position": [5.8163, 0.1604, 1.6389],
+        "orientation": [-0.0555, 0.6256, 0.7751, -0.0688],
+        "horizontal_aperture": 15.0,
+    },
 }
 
 # ── Public entry point ───────────────────────────────────────────────────

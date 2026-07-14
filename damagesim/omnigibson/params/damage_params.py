@@ -114,7 +114,11 @@ DAMAGEABLE_OBJECTS = {
     "food_in_microwave": {
         "categories": ["agent", "microwave", "cupcake", "bowl"],
         "names": [],
-    }
+    },
+    "towel_fire": {
+        "categories": ["agent", "dishtowel"],
+        "names": [],
+    },
 }
 
 PARAMS = {
@@ -431,6 +435,20 @@ PARAMS = {
             "qs_damage_sensitivity": 0.5,
             "damage_threshold": 100.0,
             "damage_scale": 1.0,
+        },
+    },
+    "dishtowel": {
+        "damage_evaluators": ["mechanical", "thermal"],
+        "mechanical": {
+            "impact_damage_sensitivity": 0.5,
+            "qs_damage_sensitivity": 0.5,
+            "damage_threshold": 100.0,
+            "damage_scale": 1.0,
+        },
+        "thermal": {
+            "heating_threshold": 80.0,
+            "cooling_threshold": -20.0,
+            "scale": 0.5,
         },
     },
     "wood_fireplace": {
