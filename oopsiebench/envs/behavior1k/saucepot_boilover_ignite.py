@@ -1,13 +1,19 @@
 """
-Task configuration for **heat_saucepot**.
+Task configuration for **saucepot_boilover_ignite**.
 
-Uses the native cooktop from house_single_floor (the ``burner_mjvqii_0`` under the
-range hood). The saucepot starts on the back-right burner; the task is to turn the
-burner on (via its right-most knob) and move the pot onto the front-right burner,
-then back the gripper off.
-
-Scene : house_single_floor (kitchen)
+Scene : house_single_floor (kitchen, cooktop cluster — same burner as
+        heat_saucepot / towel_fire)
 Robot : FrankaMounted (franka0)
+Damage: mechanical + thermal (saucepot + towel + robot)
+
+Joint recombination of heat_saucepot.py + towel_fire.py: both already share
+the exact same burner/robot-spawn/camera, so this places heat_saucepot's
+saucepot at its own burner-local start spot AND towel_fire's towel/place_mat
+at theirs (all >0.4m apart, non-colliding), using towel_fire's hotter/wider
+burner retune (so ignition is actually reachable, unlike heat_saucepot's
+tamed defaults). Completion requires the burner on, the pot moved onto its
+target burner spot, AND the gripper backed away from both the pot and the
+towel — the one genuinely joint completion check across this batch.
 """
 
 from __future__ import annotations
@@ -19,37 +25,41 @@ from omnigibson import object_states
 from omnigibson.object_states import HeatSourceOrSink
 from omnigibson.utils import transform_utils as T
 
-from oopsiebench.envs.behavior1k.base import TaskConfig
+from oopsiebench.envs.behavior1k.base import TaskConfig, reset_randomize_enabled
 from oopsiebench.envs.behavior1k.spatial_checks import (
     gripper_far_from_object,
     eef_world_position_or_raise,
+)
+from oopsiebench.envs.behavior1k.heat_saucepot import (
+    BURNER_NAME,
+    _POT_SPAWN_LOCAL_XY,
+    _TOGGLE_BUTTON_LOCAL_XYZ,
+    _TOGGLE_ASSIST_DIST,
+    _cooktop_local_to_world,
+    _seat_on_surface,
+    _pot_on_burner,
 )
 
 ROBOT_NAME = "franka0"
 ROBOT_TYPE = "FrankaMounted"
 
-BURNER_NAME = "burner_mjvqii_0"  # native house_single_floor cooktop
 BURNER_XY = [4.17, -0.51]
 
 ROBOT_POSITION = [4.8, -0.51, 0.0]
 ROBOT_ORIENTATION = [0.0, 0.0, 1.0, 0.0]
 _ORN_Z_PLUS_90_DEG = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476]
 
-# Burner heat source, re-tamed in reset() (its defaults would cook the gripper at the knobs).
-_BURNER_HEAT_RADIUS = 0.12
-_BURNER_HEAT_TEMP = 300.0
+# Hotter/wider than heat_saucepot's tamed defaults (towel_fire's own values) —
+# needed so the towel can actually ignite in this joint scenario.
+_BURNER_HEAT_RADIUS = 0.2
+_BURNER_HEAT_TEMP = 400.0
 
-# Burner-frame xy of the heat-source links: pot starts back-right, goal is front-right.
-_POT_SPAWN_LOCAL_XY = [-0.1123, 0.2542]
-_POT_SPAWN_LOCAL_XY_02 = [0.1123, 0.2542]
-_TARGET_BURNER_LOCAL_XY = [0.0748, 0.2532]
-_POT_ON_BURNER_XY_MAX_M = 0.08
-
-# Stand-off toggle assist on the right-most knob.
-_TOGGLE_BUTTON_LOCAL_XYZ = [0.2216, 0.1322, 0.0182]
-_TOGGLE_ASSIST_DIST = 0.07
+_TOWEL_LOCAL_XY = [0.0, 0.65]
+_PLACE_MAT_LOCAL_XY = [0.0, -0.55]
 
 _GRIPPER_FAR_M = 0.2
+_COMPLETION_DELAY_STEPS = 300
+_burner_on_step_count = [0]
 
 # ── Task objects ─────────────────────────────────────────────────────────
 
@@ -59,10 +69,35 @@ TASK_OBJECTS = {
         "name": "saucepot",
         "category": "saucepot",
         "model": "fbfmwt",
-        # Above the burner; reset() repositions + seats it onto the cooktop surface.
         "position": [BURNER_XY[0], BURNER_XY[1], 1.15],
         "scale": [0.5, 0.5, 0.5],
         "orientation": _ORN_Z_PLUS_90_DEG,
+    },
+    "towel": {
+        "type": "DatasetObject",
+        "name": "towel",
+        "category": "dishtowel",
+        "model": "dtfspn",
+        "position": [BURNER_XY[0] + 0.35, BURNER_XY[1] + 0.30, 1.15],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+        "abilities": {
+            "flammable": {
+                "ignition_temperature": 150.0,
+                "fire_temperature": 700.0,
+                "heating_rate": 0.04,
+                "distance_threshold": 0.4,
+            }
+        },
+    },
+    "place_mat": {
+        "type": "DatasetObject",
+        "name": "place_mat",
+        "category": "place_mat",
+        "model": "nxzfmz",
+        "position": [BURNER_XY[0] - 0.35, BURNER_XY[1] - 0.30, 1.15],
+        "orientation": [0.0, 0.0, 0.0, 1.0],
+        "scale": [0.3, 0.3, 0.3],
+        "fixed_base": True,
     },
 }
 
@@ -77,9 +112,6 @@ EXTERNAL_CAMERA_CONFIGS = {
         "orientation": VIEWER_CAMERA_ORN,
         "horizontal_aperture": 20.0,
     },
-    # Second viewpoint, generated via scripts/gen_camera_poses.py: rotated 65deg
-    # around the vertical axis through sensor_0's inferred look-at target
-    # (same height/aperture), to match PointWorld's 2-camera droid training data.
     "external_sensor_1": {
         "position": [6.2007, 0.2033, 1.9000],
         "orientation": [0.3270, 0.3894, 0.6594, 0.5537],
@@ -92,63 +124,7 @@ _U_YAW = 0.12
 _U_ARM = 0.2
 
 
-def _cooktop_local_to_world(burner, local):
-    """World position of a burner-frame xy (or xyz) point, transformed by the cooktop pose."""
-    vec = list(local)
-    if len(vec) == 2:
-        vec = vec + [0.0]
-    bpos, born = burner.get_position_orientation()
-    local_t = th.tensor(vec, dtype=bpos.dtype, device=bpos.device)
-    return bpos + T.quat_apply(born, local_t)
-
-
-def _support_surface_top_z(env, obj) -> float:
-    """Top-z of the nearest surface directly beneath obj's xy (here: the cooktop)."""
-    obj_pos, _ = obj.get_position_orientation()
-    obj_pos = obj_pos if isinstance(obj_pos, th.Tensor) else th.tensor(obj_pos, dtype=th.float32)
-    target_z = float(obj_pos[2])
-
-    def _inside_xy(p, amin, amax):
-        return (float(amin[0]) <= float(p[0]) <= float(amax[0])
-                and float(amin[1]) <= float(p[1]) <= float(amax[1]))
-
-    excluded = {obj.name}
-    for r in getattr(env, "robots", []) or []:
-        if hasattr(r, "name"):
-            excluded.add(r.name)
-
-    candidates = []
-    for scene_obj in getattr(env.scene, "objects", []) or []:
-        if scene_obj is None or getattr(scene_obj, "name", None) in excluded:
-            continue
-        if not hasattr(scene_obj, "aabb") or scene_obj.aabb is None:
-            continue
-        amin, amax = scene_obj.aabb
-        top_z = float(amax[2])
-        if top_z >= target_z or not _inside_xy(obj_pos, amin, amax):
-            continue
-        candidates.append((target_z - top_z, top_z))
-
-    if not candidates:
-        raise RuntimeError("[heat_saucepot] no supporting surface found under saucepot")
-    candidates.sort(key=lambda x: x[0])
-    return candidates[0][1]
-
-
-def _seat_on_surface(env, obj):
-    """Shift obj vertically so its AABB bottom rests on the surface beneath it."""
-    top_z = _support_surface_top_z(env, obj)
-    if object_states.AABB not in obj.states:
-        return
-    lower, _ = obj.states[object_states.AABB].get_value()
-    pos, orn = obj.get_position_orientation()
-    pos = pos.clone()
-    pos[2] = pos[2] + (top_z - float(lower[2]))
-    obj.set_position_orientation(pos, orn)
-
-
-def _tame_burner_heat(env):
-    """Tighten + cool the native burner's live heat source (re-applied each reset/playback)."""
+def _configure_burner_heat(env):
     burner = env.scene.object_registry("name", BURNER_NAME)
     if burner is None or not hasattr(burner, "states"):
         return
@@ -160,7 +136,6 @@ def _tame_burner_heat(env):
 
 
 def _place_saucepot(env):
-    """Position the saucepot on its start (back-right) burner and seat it on the cooktop."""
     saucepot = env.scene.object_registry("name", "saucepot")
     burner = env.scene.object_registry("name", BURNER_NAME)
     if saucepot is None:
@@ -179,6 +154,27 @@ def _place_saucepot(env):
         saucepot.keep_still()
 
 
+def _place_towel_and_mat(env):
+    burner = env.scene.object_registry("name", BURNER_NAME)
+    if burner is None:
+        return
+    for obj_name, local_xy in (("towel", _TOWEL_LOCAL_XY), ("place_mat", _PLACE_MAT_LOCAL_XY)):
+        obj = env.scene.object_registry("name", obj_name)
+        if obj is None:
+            continue
+        world = _cooktop_local_to_world(burner, local_xy)
+        pos, orn = obj.get_position_orientation()
+        pos = pos.clone()
+        pos[0], pos[1] = world[0], world[1]
+        obj.set_position_orientation(pos, orn)
+        try:
+            _seat_on_surface(env, obj)
+        except RuntimeError as e:
+            print(e)
+        if hasattr(obj, "keep_still"):
+            obj.keep_still()
+
+
 def _burner_on(burner) -> bool:
     if burner is None or object_states.ToggledOn not in burner.states:
         return False
@@ -189,27 +185,12 @@ def _burner_on(burner) -> bool:
     return bool(burner.states[HeatSourceOrSink].get_value())
 
 
-def _pot_on_burner(burner, saucepot) -> bool:
-    """OnTop the cooktop AND over the front-right target burner (not just anywhere)."""
-    if burner is None or saucepot is None or object_states.OnTop not in saucepot.states:
-        return False
-    try:
-        if not bool(saucepot.states[object_states.OnTop].get_value(other=burner)):
-            return False
-    except (KeyError, AttributeError):
-        return False
-    target = _cooktop_local_to_world(burner, _TARGET_BURNER_LOCAL_XY)
-    pot_xy = saucepot.get_position_orientation()[0][:2].to(dtype=target.dtype, device=target.device)
-    return float(th.norm(pot_xy - target[:2])) <= _POT_ON_BURNER_XY_MAX_M
-
-
 def _assist_turn_on(env):
-    """Toggle the burner on once the gripper reaches the right-most knob."""
     burner = env.scene.object_registry("name", BURNER_NAME)
     if burner is None or object_states.ToggledOn not in burner.states or not getattr(env, "robots", None):
         return
     if bool(burner.states[object_states.ToggledOn].get_value()):
-        return  # already on
+        return
     marker = _cooktop_local_to_world(burner, _TOGGLE_BUTTON_LOCAL_XYZ)
     eef = eef_world_position_or_raise(env.robots[0])
     marker = marker.reshape(-1)[:3].to(dtype=eef.dtype, device=eef.device)
@@ -221,66 +202,81 @@ def _assist_turn_on(env):
 
 
 def reset(env):
-    """Tame the burner, place the saucepot on its start burner, jitter robot, settle."""
-    _tame_burner_heat(env)
+    """Configure the hot/wide burner, place saucepot + towel/mat, jitter robot, settle."""
+    _burner_on_step_count[0] = 0
+    _configure_burner_heat(env)
     _place_saucepot(env)
+    _place_towel_and_mat(env)
 
     if not getattr(env, "robots", None):
         return
     robot = env.robots[0]
 
-    pos, orn = robot.get_position_orientation()
-    pos = pos.clone()
-    pos[0] += float(np.random.uniform(-_U_XY, _U_XY))
-    pos[1] += float(np.random.uniform(-_U_XY, _U_XY))
-    euler = T.quat2euler(orn).clone()
-    euler[2] = euler[2] + float(np.random.uniform(-_U_YAW, _U_YAW))
-    orn = T.euler2quat(euler)
-    robot.set_position_orientation(pos, orn)
+    if reset_randomize_enabled():
+        pos, orn = robot.get_position_orientation()
+        pos = pos.clone()
+        pos[0] += float(np.random.uniform(-_U_XY, _U_XY))
+        pos[1] += float(np.random.uniform(-_U_XY, _U_XY))
+        euler = T.quat2euler(orn).clone()
+        euler[2] = euler[2] + float(np.random.uniform(-_U_YAW, _U_YAW))
+        orn = T.euler2quat(euler)
+        robot.set_position_orientation(pos, orn)
 
-    q = robot.get_joint_positions().clone()
-    for arm_name in robot.arm_control_idx:
-        idx = robot.arm_control_idx[arm_name]
-        u = (th.rand(len(idx), device=q.device, dtype=q.dtype) * 2 - 1) * _U_ARM
-        q[idx] = q[idx] + u
-    robot.set_joint_positions(q)
-    robot.set_joint_velocities(th.zeros(robot.n_dof, device=q.device, dtype=q.dtype))
-    robot.keep_still()
+        q = robot.get_joint_positions().clone()
+        for arm_name in robot.arm_control_idx:
+            idx = robot.arm_control_idx[arm_name]
+            u = (th.rand(len(idx), device=q.device, dtype=q.dtype) * 2 - 1) * _U_ARM
+            q[idx] = q[idx] + u
+        robot.set_joint_positions(q)
+        robot.set_joint_velocities(th.zeros(robot.n_dof, device=q.device, dtype=q.dtype))
+        robot.keep_still()
 
     for _ in range(10):
         og.sim.step()
 
 
 def playback_reset(env):
-    """Match teleop's initial setup at playback start — reset() isn't run during playback,
-    so without this the burner stays untamed and the pot starts at its raw spawn pose."""
-    _tame_burner_heat(env)
+    """reset() isn't run during playback — re-apply burner config + placements."""
+    _configure_burner_heat(env)
     _place_saucepot(env)
+    _place_towel_and_mat(env)
 
 
 def playback_step(env):
-    """Re-apply the burner toggle each step — task_completion_check (which calls
-    _assist_turn_on in teleop) isn't run during playback."""
+    """Re-apply the burner toggle each step — task_completion_check's assist isn't run
+    during playback."""
     _assist_turn_on(env)
 
 
 def task_completion_check(env):
-    # Toggle the burner on when the gripper reaches the right-most knob (teleop assist).
     _assist_turn_on(env)
 
     burner = env.scene.object_registry("name", BURNER_NAME)
     saucepot = env.scene.object_registry("name", "saucepot")
-    if burner is None or saucepot is None or not getattr(env, "robots", None):
+    towel = env.scene.object_registry("name", "towel")
+    if burner is None or saucepot is None or towel is None or not getattr(env, "robots", None):
         return False
 
-    pot_ok = _burner_on(burner) and _pot_on_burner(burner, saucepot)
-    gripper_far = gripper_far_from_object(env.robots[0], saucepot, threshold=_GRIPPER_FAR_M)
+    if not _burner_on(burner):
+        return False
+    _burner_on_step_count[0] += 1
+    if _burner_on_step_count[0] == 1:
+        print(f"[saucepot_boilover_ignite] Burner on — ending episode after {_COMPLETION_DELAY_STEPS} more steps.")
+    if _burner_on_step_count[0] < _COMPLETION_DELAY_STEPS:
+        return False
+
+    pot_ok = _pot_on_burner(burner, saucepot)
+    robot = env.robots[0]
+    gripper_far = (
+        gripper_far_from_object(robot, saucepot, threshold=_GRIPPER_FAR_M)
+        and gripper_far_from_object(robot, towel, threshold=_GRIPPER_FAR_M)
+    )
     return pot_ok and gripper_far
 
 
 def get_task_config() -> TaskConfig:
     return TaskConfig(
-        task_name="heat_saucepot",
+        task_name="saucepot_boilover_ignite",
 
         use_gpu_dynamics=False,
         enable_transition_rules=False,
@@ -332,14 +328,16 @@ def get_task_config() -> TaskConfig:
             f"{ROBOT_NAME}@panda_leftfinger",
             f"{ROBOT_NAME}@panda_rightfinger",
             "saucepot@base_link",
+            "towel@base_link",
         ],
-        target_objects_health=[ROBOT_NAME, "saucepot"],
+        target_objects_health=[ROBOT_NAME, "saucepot", "towel"],
         target_objects_temperature=[
             f"{ROBOT_NAME}@eef_link",
             f"{ROBOT_NAME}@panda_hand",
             f"{ROBOT_NAME}@panda_leftfinger",
             f"{ROBOT_NAME}@panda_rightfinger",
             "saucepot@base_link",
+            "towel@base_link",
         ],
         target_objects_forces=[
             f"{ROBOT_NAME}@eef_link",
@@ -347,10 +345,11 @@ def get_task_config() -> TaskConfig:
             f"{ROBOT_NAME}@panda_leftfinger",
             f"{ROBOT_NAME}@panda_rightfinger",
             "saucepot@base_link",
+            "towel@base_link",
         ],
         force_keys=["filtered_qs_forces"],
 
-        default_collect_hdf5="demos/behavior1k/teleop_data/heat_saucepot.hdf5",
-        default_playback_hdf5="demos/behavior1k/playback_data/heat_saucepot_playback.hdf5",
-        default_video_dir="demos/behavior1k/playback_videos/heat_saucepot",
+        default_collect_hdf5="demos/behavior1k/teleop_data/saucepot_boilover_ignite.hdf5",
+        default_playback_hdf5="demos/behavior1k/playback_data/saucepot_boilover_ignite_playback.hdf5",
+        default_video_dir="demos/behavior1k/playback_videos/saucepot_boilover_ignite",
     )

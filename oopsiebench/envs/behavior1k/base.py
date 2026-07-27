@@ -4,8 +4,21 @@ Shared data-structures and defaults for task configurations.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+
+def reset_randomize_enabled() -> bool:
+    """
+    Whether task reset()s should apply their per-episode pose/scale jitter and
+    upright-retry loop (see e.g. shelve_item.py, pot_off_shelf.py,
+    nav_shelf_clip.py). Set OOPSIEVERSE_NO_RESET_RANDOMIZE=1 to disable it
+    across all tasks that check this -- useful when the jitter fights a
+    tightly-tuned scene (e.g. stacked/adjacent fragile props) and you just
+    want the baked INIT_STATE_PATH (or raw TASK_OBJECTS spawn) as-is.
+    """
+    return not bool(os.environ.get("OOPSIEVERSE_NO_RESET_RANDOMIZE"))
 
 
 @dataclass

@@ -82,6 +82,36 @@ TASK_REGISTRY = {
     "open_single_door": "open_single_door",
     "food_in_microwave": "food_in_microwave",
     "towel_fire": "towel_fire",
+    "nav_to_table_02": "nav_to_table_02",
+    "carry_quilt": "carry_quilt",
+    "door_and_mug": "door_and_mug",
+
+    # New "unsafe" recombination scenarios
+    "firewood_burn_grip": "firewood_burn_grip",
+    "firewood_overshoot": "firewood_overshoot",
+    "shelf_domino": "shelf_domino",
+    "pot_off_shelf": "pot_off_shelf",
+    "mug_at_door": "mug_at_door",
+    "nav_mug_sweep": "nav_mug_sweep",
+    "bowl_drop_in_sink": "bowl_drop_in_sink",
+    "plate_stack_collapse": "plate_stack_collapse",
+    "microwave_egg_crush": "microwave_egg_crush",
+    "sponge_on_burner": "sponge_on_burner",
+    "saucepot_boilover_ignite": "saucepot_boilover_ignite",
+    "drawer_pinch": "drawer_pinch",
+    "door_mat_scorch": "door_mat_scorch",
+    "faucet_overflow_outlet": "faucet_overflow_outlet",
+    "pour_on_microwave": "pour_on_microwave",
+    "faucet_splash_stove": "faucet_splash_stove",
+    "wet_hand_switch": "wet_hand_switch",
+    "egg_in_drawer": "egg_in_drawer",
+    "microwave_overheat_spill": "microwave_overheat_spill",
+    "nav_door_squeeze": "nav_door_squeeze",
+    "door_slam_vase": "door_slam_vase",
+    "nav_pot_bump": "nav_pot_bump",
+    "nav_shelf_clip": "nav_shelf_clip",
+    "nav_quilt_drag": "nav_quilt_drag",
+    "quilt_over_fireplace": "quilt_over_fireplace",
 }
 
 # Global variables for teleop
@@ -191,14 +221,9 @@ def build_external_sensors_config(task_cfg, robot_name: str, robot_type: str,
     sensors = []
     for name, cam_cfg in task_cfg.external_camera_configs.items():
         idx = name.split("_")[-1]
-        prim_path = (
-            f"/controllable__damageable{robot_type.lower()}"
-            f"__{robot_name}/base_link/external_sensor{idx}"
-        )
-        sensors.append({
+        sensor = {
             "sensor_type": "VisionSensor",
             "name": f"external_sensor{idx}",
-            "relative_prim_path": prim_path,
             "modalities": ["rgb", "seg_instance"],
             "sensor_kwargs": {
                 "image_height": image_height,
@@ -208,7 +233,14 @@ def build_external_sensors_config(task_cfg, robot_name: str, robot_type: str,
             "position": th.tensor(cam_cfg["position"], dtype=th.float32),
             "orientation": th.tensor(cam_cfg["orientation"], dtype=th.float32),
             "pose_frame": cam_cfg.get("frame", "world"),
-        })
+        }
+        # world_fixed -> leave at world level (stationary); else parent under base_link.
+        if not cam_cfg.get("world_fixed", False):
+            sensor["relative_prim_path"] = (
+                f"/controllable__damageable{robot_type.lower()}"
+                f"__{robot_name}/base_link/external_sensor{idx}"
+            )
+        sensors.append(sensor)
     return sensors
 
 

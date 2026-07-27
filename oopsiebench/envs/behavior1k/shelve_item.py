@@ -14,7 +14,7 @@ from scipy.spatial.transform import Rotation as R
 from omnigibson import object_states
 from omnigibson.controllers.controller_base import IsGraspingState
 
-from oopsiebench.envs.behavior1k.base import TaskConfig
+from oopsiebench.envs.behavior1k.base import TaskConfig, reset_randomize_enabled
 from oopsiebench.envs.behavior1k.spatial_checks import gripper_far_from_object
 
 ROBOT_NAME = "franka0"
@@ -217,6 +217,16 @@ def reset(env):
     stand = env.scene.object_registry("name", "stand")
 
     objects = [flour, wineglass, winebottle, beerbottle]
+
+    if not reset_randomize_enabled():
+        # OOPSIEVERSE_NO_RESET_RANDOMIZE=1: skip the jitter/scale/upright-retry
+        # loop below, just load the baked baseline as-is and settle briefly.
+        with open(INIT_STATE_PATH, "rb") as f: state_flat_array = pickle.load(f)
+        og.sim.load_state(state_flat_array, serialized=True)
+        for _ in range(5):
+            og.sim.step()
+        return
+
     trial_number = 0
     while True:
         print("Reset trial number: ", trial_number)
