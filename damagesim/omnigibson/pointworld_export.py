@@ -30,6 +30,11 @@ try:
 except ImportError:
     og = None
 
+try:
+    from omnigibson import object_states
+except ImportError:
+    object_states = None
+
 
 def _to_numpy(x):
     if th is not None and isinstance(x, th.Tensor):
@@ -122,6 +127,8 @@ class PointWorldRecorder:
         self._buf_gripper_width: List[float] = []
         self._buf_eef_pose: List[np.ndarray] = []
         self._buf_object_poses: List[np.ndarray] = []
+        self._buf_object_temperatures: List[np.ndarray] = []
+        self._buf_fluid_particle_positions: Dict[str, List[np.ndarray]] = {}
         self._buf_health: List[np.ndarray] = []
         self._buf_damage_info: List[str] = []
         self._buf_cam_rgb: Dict[str, List[np.ndarray]] = {}
@@ -240,6 +247,46 @@ class PointWorldRecorder:
             poses.append(np.concatenate([_to_numpy(pos), _to_numpy(orn)]).astype(np.float32))
         self._buf_object_poses.append(np.stack(poses, axis=0) if poses else np.zeros((0, 7), np.float32))
 
+        # Per-object temperature (Celsius, one scalar per object -- see
+        # object_states.Temperature). Objects without a Temperature state
+        # (e.g. purely static scene geometry) get NaN, same convention as
+        # the object_masses fallback above.
+        if object_states is not None:
+            temps = []
+            for name in self._object_names:
+                obj = scene.object_registry("name", name)
+                try:
+                    temps.append(float(obj.states[object_states.Temperature].get_value()))
+                except Exception:
+                    temps.append(float("nan"))
+            self._buf_object_temperatures.append(np.array(temps, dtype=np.float32))
+
+        # Fluid/particle-system points (e.g. water). Each active physical
+        # particle system's raw particle positions are recorded per step --
+        # this is the ground truth for "is this point fluid", queried
+        # directly from the sim rather than inferred from RGB (see
+        # ContainedParticles/Filled, used the same way in pour_water.py's
+        # task_completion_check). Cloth and visual-only particle systems
+        # (dust, stains, ...) are skipped; those aren't fluid dynamics.
+        for sys_name, system in scene.active_systems.items():
+            if not scene.is_physical_particle_system(system_name=sys_name):
+                continue
+            if sys_name not in self._buf_fluid_particle_positions:
+                # System can start emitting mid-episode (e.g. water only
+                # created inside a task's reset()); pad with empty frames
+                # for steps already recorded so every system's buffer stays
+                # aligned to len(self._buf_object_poses).
+                n_prior_steps = len(self._buf_object_poses) - 1
+                self._buf_fluid_particle_positions[sys_name] = [
+                    np.zeros((0, 3), dtype=np.float32) for _ in range(max(0, n_prior_steps))
+                ]
+            positions = (
+                _to_numpy(system.get_particles_position_orientation()[0]).astype(np.float32)
+                if system.n_particles > 0
+                else np.zeros((0, 3), dtype=np.float32)
+            )
+            self._buf_fluid_particle_positions[sys_name].append(positions)
+
         health = obs.get("health")
         self._buf_health.append(_to_numpy(health).astype(np.float32) if health is not None else np.zeros(0, np.float32))
         if self._health_link_names is None:
@@ -297,6 +344,9 @@ class PointWorldRecorder:
             "object_poses": np.stack(self._buf_object_poses, axis=0)
             if self._buf_object_poses
             else np.zeros((0, 0, 7), np.float32),
+            "object_temperatures": np.stack(self._buf_object_temperatures, axis=0)
+            if self._buf_object_temperatures
+            else np.zeros((0, 0), np.float32),
             "health_link_names": np.array(self._health_link_names or [], dtype=object),
             "health": np.stack(self._buf_health, axis=0) if self._buf_health else np.zeros((0, 0), np.float32),
             "damage_info": np.array(self._buf_damage_info, dtype=object),
@@ -316,6 +366,14 @@ class PointWorldRecorder:
             out[f"{name}_intrinsic"] = self._cam_intrinsic[name]
             out[f"{name}_extrinsic"] = self._cam_extrinsic[name]
             out[f"{name}_seg_id_map"] = json.dumps(self._seg_id_map.get(name, {}))
+
+        # Ragged per-step particle counts -> store as an object array (same
+        # convention as damage_info above) rather than padding to a fixed N,
+        # since n_particles genuinely varies frame to frame (poured/absorbed/
+        # removed particles).
+        for sys_name, pos_list in self._buf_fluid_particle_positions.items():
+            out[f"fluid_{sys_name}_particle_positions"] = np.array(pos_list, dtype=object)
+            out[f"fluid_{sys_name}_n_particles"] = np.array([len(p) for p in pos_list], dtype=np.int64)
 
         suffix = "_joints" if self.joints_only else ""
         out_path = self.out_dir / f"episode_{self.source_tag}_{self._episode_id}{suffix}.npz"
