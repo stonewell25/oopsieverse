@@ -61,6 +61,7 @@ from damagesim.omnigibson.pointworld_export import PointWorldRecorder
 TASK_REGISTRY: Dict[str, str] = {
     "default": "oopsiebench.envs.behavior1k.default",
     "shelve_item": "oopsiebench.envs.behavior1k.shelve_item",
+    "shelve_item_benevolence": "oopsiebench.envs.behavior1k.shelve_item_benevolence",
     "add_firewood": "oopsiebench.envs.behavior1k.add_firewood",
     "firewood": "oopsiebench.envs.behavior1k.add_firewood",
     "pour_water": "oopsiebench.envs.behavior1k.pour_water",
@@ -105,6 +106,10 @@ TASK_REGISTRY: Dict[str, str] = {
     "nav_shelf_clip": "oopsiebench.envs.behavior1k.nav_shelf_clip",
     "nav_quilt_drag": "oopsiebench.envs.behavior1k.nav_quilt_drag",
     "quilt_over_fireplace": "oopsiebench.envs.behavior1k.quilt_over_fireplace",
+    "turn_on_stove_pomaria": "oopsiebench.envs.behavior1k.turn_on_stove_pomaria",
+    "turn_on_stove_beechwood_int": "oopsiebench.envs.behavior1k.turn_on_stove_beechwood_int",
+    "turn_on_stove_beechwood_garden": "oopsiebench.envs.behavior1k.turn_on_stove_beechwood_garden",
+    "turn_on_stove_house_double_floor_lower": "oopsiebench.envs.behavior1k.turn_on_stove_house_double_floor_lower",
 }
 
 
@@ -391,6 +396,12 @@ def run_playback(args, task_cfg, task_mod):
         cam_modalities = ["rgb", "seg_instance"]
         if export_pointworld and not export_joints_only:
             cam_modalities.append("depth_linear")
+            # Finer-grained than seg_instance (which labels a whole articulated object as
+            # one id): labels each pixel with the prim path of its source visual mesh, so
+            # e.g. a cabinet's drawer link can be told apart from its base link. Needed to
+            # compute correct per-link flow ground truth for articulated objects (see
+            # pointworld_export.py's link_poses).
+            cam_modalities.append("seg_instance_id")
 
         external_sensors_config = build_external_sensors_config(
             task_cfg, robot_name, robot_type, image_h, image_w, modalities=cam_modalities,

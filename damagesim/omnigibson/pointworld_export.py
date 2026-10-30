@@ -118,6 +118,7 @@ class PointWorldRecorder:
         self._cam_extrinsic: Dict[str, np.ndarray] = {}
         self._object_names: List[str] = []
         self._object_masses: List[float] = []
+        self._object_categories: List[str] = []
         self._reset_buffers()
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -128,13 +129,17 @@ class PointWorldRecorder:
         self._buf_eef_pose: List[np.ndarray] = []
         self._buf_object_poses: List[np.ndarray] = []
         self._buf_object_temperatures: List[np.ndarray] = []
+        self._buf_link_poses: List[np.ndarray] = []
         self._buf_fluid_particle_positions: Dict[str, List[np.ndarray]] = {}
         self._buf_health: List[np.ndarray] = []
         self._buf_damage_info: List[str] = []
         self._buf_cam_rgb: Dict[str, List[np.ndarray]] = {}
         self._buf_cam_depth: Dict[str, List[np.ndarray]] = {}
         self._buf_cam_seg: Dict[str, List[np.ndarray]] = {}
+        self._buf_cam_seg_instance_id: Dict[str, List[np.ndarray]] = {}
         self._seg_id_map: Dict[str, Dict[int, str]] = {}
+        self._seg_id_map_link: Dict[str, Dict[int, str]] = {}
+        self._link_names: List[str] = []
         self._step_counter = 0
         self._joint_names: Optional[List[str]] = None
         self._health_link_names: Optional[List[str]] = None
@@ -175,6 +180,7 @@ class PointWorldRecorder:
             o.name for o in scene.objects if o not in scene.robots
         )
         self._object_masses = []
+        self._object_categories = []
         for name in self._object_names:
             obj = scene.object_registry("name", name)
             try:
@@ -182,6 +188,25 @@ class PointWorldRecorder:
             except Exception:
                 mass = float("nan")
             self._object_masses.append(mass)
+            try:
+                category = str(obj.category)
+            except Exception:
+                category = "default"
+            self._object_categories.append(category)
+
+        # Flat "{object}@{link}" list (same convention as health_link_names /
+        # damage_info) covering every link of every non-robot object, so
+        # per-link poses (below) can capture articulated child-link motion
+        # (a cabinet drawer, a door slab) that the object's own root-link
+        # pose in object_poses never reflects.
+        self._link_names = []
+        for name in self._object_names:
+            obj = scene.object_registry("name", name)
+            try:
+                link_names = list(obj.links.keys())
+            except Exception:
+                link_names = []
+            self._link_names.extend(f"{name}@{link_name}" for link_name in link_names)
 
         if not self.joints_only:
             external_sensors = getattr(self.env, "_external_sensors", None) or {}
@@ -214,7 +239,9 @@ class PointWorldRecorder:
                 self._buf_cam_rgb[name] = []
                 self._buf_cam_depth[name] = []
                 self._buf_cam_seg[name] = []
+                self._buf_cam_seg_instance_id[name] = []
                 self._seg_id_map[name] = {}
+                self._seg_id_map_link[name] = {}
 
         self._scene_state_captured = True
 
@@ -246,6 +273,21 @@ class PointWorldRecorder:
             pos, orn = obj.get_position_orientation(frame="world")
             poses.append(np.concatenate([_to_numpy(pos), _to_numpy(orn)]).astype(np.float32))
         self._buf_object_poses.append(np.stack(poses, axis=0) if poses else np.zeros((0, 7), np.float32))
+
+        # Per-link world pose (see _link_names above) -- unlike object_poses,
+        # this captures a drawer/door child link's own motion on its joint,
+        # not just the object's root/base link.
+        link_poses = []
+        for name in self._object_names:
+            obj = scene.object_registry("name", name)
+            try:
+                links = obj.links
+            except Exception:
+                links = {}
+            for link in links.values():
+                lpos, lorn = link.get_position_orientation(frame="world")
+                link_poses.append(np.concatenate([_to_numpy(lpos), _to_numpy(lorn)]).astype(np.float32))
+        self._buf_link_poses.append(np.stack(link_poses, axis=0) if link_poses else np.zeros((0, 7), np.float32))
 
         # Per-object temperature (Celsius, one scalar per object -- see
         # object_states.Temperature). Objects without a Temperature state
@@ -306,9 +348,13 @@ class PointWorldRecorder:
             rgb = obs.get(f"external::{name}::rgb")
             depth = obs.get(f"external::{name}::depth_linear")
             seg = obs.get(f"external::{name}::seg_instance")
+            seg_link = obs.get(f"external::{name}::seg_instance_id")
             seg_info = external_info.get(name, {}).get("seg_instance")
             if seg_info:
                 self._seg_id_map[name].update({int(k): str(v) for k, v in seg_info.items()})
+            seg_link_info = external_info.get(name, {}).get("seg_instance_id")
+            if seg_link_info:
+                self._seg_id_map_link[name].update({int(k): str(v) for k, v in seg_link_info.items()})
             self._buf_cam_rgb[name].append(_to_numpy(rgb)[..., :3].astype(np.uint8) if rgb is not None else None)
             if depth is not None:
                 depth_mm = np.clip(_to_numpy(depth) * 1000.0, 0, 65535).astype(np.uint16)
@@ -316,6 +362,9 @@ class PointWorldRecorder:
                 depth_mm = None
             self._buf_cam_depth[name].append(depth_mm)
             self._buf_cam_seg[name].append(_to_numpy(seg).astype(np.int32) if seg is not None else None)
+            self._buf_cam_seg_instance_id[name].append(
+                _to_numpy(seg_link).astype(np.int32) if seg_link is not None else None
+            )
 
         if self.checkpoint_every and len(self._buf_joint_positions) % self.checkpoint_every == 0:
             self._write_npz(partial=True)
@@ -341,12 +390,17 @@ class PointWorldRecorder:
             "eef_pose": np.stack(self._buf_eef_pose, axis=0) if self._buf_eef_pose else np.zeros((0, 7), np.float32),
             "object_names": np.array(self._object_names, dtype=object),
             "object_masses": np.array(self._object_masses, dtype=np.float32),
+            "object_categories": np.array(self._object_categories, dtype=object),
             "object_poses": np.stack(self._buf_object_poses, axis=0)
             if self._buf_object_poses
             else np.zeros((0, 0, 7), np.float32),
             "object_temperatures": np.stack(self._buf_object_temperatures, axis=0)
             if self._buf_object_temperatures
             else np.zeros((0, 0), np.float32),
+            "link_names": np.array(self._link_names, dtype=object),
+            "link_poses": np.stack(self._buf_link_poses, axis=0)
+            if self._buf_link_poses
+            else np.zeros((0, 0, 7), np.float32),
             "health_link_names": np.array(self._health_link_names or [], dtype=object),
             "health": np.stack(self._buf_health, axis=0) if self._buf_health else np.zeros((0, 0), np.float32),
             "damage_info": np.array(self._buf_damage_info, dtype=object),
@@ -363,9 +417,13 @@ class PointWorldRecorder:
                 out[f"{name}_depth"] = np.stack(depth_list, axis=0)
             if seg_list and seg_list[0] is not None:
                 out[f"{name}_seg_instance"] = np.stack(seg_list, axis=0)
+            seg_link_list = self._buf_cam_seg_instance_id.get(name, [])
+            if seg_link_list and seg_link_list[0] is not None:
+                out[f"{name}_seg_instance_id"] = np.stack(seg_link_list, axis=0)
             out[f"{name}_intrinsic"] = self._cam_intrinsic[name]
             out[f"{name}_extrinsic"] = self._cam_extrinsic[name]
             out[f"{name}_seg_id_map"] = json.dumps(self._seg_id_map.get(name, {}))
+            out[f"{name}_seg_id_map_link"] = json.dumps(self._seg_id_map_link.get(name, {}))
 
         # Ragged per-step particle counts -> store as an object array (same
         # convention as damage_info above) rather than padding to a fixed N,

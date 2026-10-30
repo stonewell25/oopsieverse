@@ -68,6 +68,7 @@ TASK_CONFIG_PACKAGE = "oopsiebench.envs.behavior1k"
 TASK_REGISTRY = {
     "default": "default",
     "shelve_item": "shelve_item",
+    "shelve_item_benevolence": "shelve_item_benevolence",
     "add_firewood": "add_firewood",
     "firewood": "add_firewood",
     "pour_water": "pour_water",
@@ -112,6 +113,10 @@ TASK_REGISTRY = {
     "nav_shelf_clip": "nav_shelf_clip",
     "nav_quilt_drag": "nav_quilt_drag",
     "quilt_over_fireplace": "quilt_over_fireplace",
+    "turn_on_stove_pomaria": "turn_on_stove_pomaria",
+    "turn_on_stove_beechwood_int": "turn_on_stove_beechwood_int",
+    "turn_on_stove_beechwood_garden": "turn_on_stove_beechwood_garden",
+    "turn_on_stove_house_double_floor_lower": "turn_on_stove_house_double_floor_lower",
 }
 
 # Global variables for teleop

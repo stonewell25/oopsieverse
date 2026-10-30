@@ -26,7 +26,7 @@ from omnigibson import object_states
 from omnigibson.controllers.controller_base import IsGraspingState
 from omnigibson.utils import transform_utils as T
 
-from oopsiebench.envs.behavior1k.base import TaskConfig, reset_randomize_enabled
+from oopsiebench.envs.behavior1k.base import TaskConfig
 from oopsiebench.envs.behavior1k.spatial_checks import gripper_far_from_object
 
 ROBOT_NAME = "franka0"
@@ -52,7 +52,11 @@ TASK_OBJECTS = {
         "name": "plate_middle",
         "category": "plate",
         "model": "ntedfx",
-        "position": [5.4, -1.7, 1.00],
+        # 0.035m = this model's real bbox thickness (see shelf_domino.py's
+        # plate_01/plate_02 spacing, [[oopsieverse-task-authoring]]'s bbox
+        # pitfall) -- the original 0.05m gap left plates interpenetrating at
+        # spawn, which blew the whole stack off the counter on step 1.
+        "position": [5.4, -1.7, 0.985],
         "orientation": [0.0, 0.0, 0.0, 1.0],
     },
     "plate_top": {
@@ -60,7 +64,7 @@ TASK_OBJECTS = {
         "name": "plate_top",
         "category": "plate",
         "model": "ntedfx",
-        "position": [5.4, -1.7, 1.05],
+        "position": [5.4, -1.7, 1.02],
         "orientation": [0.0, 0.0, 0.0, 1.0],
     },
     "place_mat": {
@@ -77,8 +81,9 @@ TASK_OBJECTS = {
 
 # ── Cameras ──────────────────────────────────────────────────────────────
 
-VIEWER_CAMERA_POS = [4.2998127937316895, -0.5513805747032166, 1.6389135122299194]
-VIEWER_CAMERA_ORN = [-0.21554666757583618, 0.5899057388305664, 0.7309074997901917, -0.2670675814151764]
+
+VIEWER_CAMERA_POS = [5.370478630065918, -0.8758299350738525, 1.526785254478454]
+VIEWER_CAMERA_ORN = [-0.2920994758605957, 0.48734050989151, 0.7058322429656982, -0.42305791378021244]
 
 EXTERNAL_CAMERA_CONFIGS = {
     "external_sensor_0": {
@@ -87,8 +92,8 @@ EXTERNAL_CAMERA_CONFIGS = {
         "horizontal_aperture": 15.0,
     },
     "external_sensor_1": {
-        "position": [5.8163, 0.1604, 1.6389],
-        "orientation": [-0.0555, 0.6256, 0.7751, -0.0688],
+        "position": [8.088642120361328, -0.7926759719848633, 1.5118576288223267],
+        "orientation": [0.319642573595047, 0.540861189365387, 0.6697852611541748, 0.39583513140678406],
         "horizontal_aperture": 15.0,
     },
 }
@@ -160,7 +165,7 @@ def get_task_config() -> TaskConfig:
         force_keys=["filtered_qs_forces", "impact_forces"],
 
         default_collect_hdf5="demos/behavior1k/teleop_data/plate_stack_collapse.hdf5",
-        default_playback_hdf5="demos/behavior1k/playback_data/plate_stack_collapse_playback.hdf5",
+        default_playback_hdf5="demos/behavior1k/playback_data/plate_stack_collapse_playbackhdf5",
         default_video_dir="demos/behavior1k/playback_videos/plate_stack_collapse",
     )
 
@@ -171,7 +176,14 @@ _U_ARM = 0.2
 _MAT_U_XY = 0.05
 _MAT_U_YAW = 0.08
 _MAX_RESET_TRIES = 20
-_MIN_PLATE_CLEARANCE = 0.15
+# place_plate.py's 0.15m assumed the plate spawns off the mat and must clear a
+# height gap before being placed on it. Here the pkl already places
+# plate_bottom directly on the counter next to (not on top of) place_mat, so
+# a small *negative* clearance (plate resting slightly below the mat's own
+# top surface) is the correct, stable resting state, not a failure -- the
+# measured value is -0.011m with jitter off (deterministic). -0.05m leaves
+# margin for that while still catching a genuine fall-through (old bug: -0.9m).
+_MIN_PLATE_CLEARANCE = -0.05
 
 _LOW_BOUNCE_PHYSICS = {
     "static_friction": 0.8,
@@ -237,7 +249,14 @@ def reset(env):
                 _apply_low_bounce_material(_obj, f"{_name}_low_bounce_mat", **_LOW_BOUNCE_PHYSICS)
         env._low_bounce_applied = True
 
-    randomize = reset_randomize_enabled()
+    # Unlike place_plate (a single plate), this task stacks 3 plates with no
+    # gap -- place_plate's inherited jitter (+-0.2 rad per arm joint, +-0.05m
+    # place_mat xy) is large enough to knock the arm/mat into the stack and
+    # topple it even from a good pkl. shelf_domino hit the same problem and
+    # fixed it by removing jitter outright for its stacked-plate scene (see
+    # docs/task_authoring_workflow.md); do the same here rather than relying
+    # on the global reset_randomize_enabled() toggle.
+    randomize = False
 
     for attempt in range(_MAX_RESET_TRIES):
         if os.path.exists(INIT_STATE_PATH):
@@ -258,6 +277,21 @@ def reset(env):
 
         robot_pos, robot_orn = robot.get_position_orientation()
         robot_joint_positions = robot.get_joint_positions()
+
+        # The pkl's arm pose is whatever the sim happened to look like when
+        # the layout was captured in inspect_scene.py (often a too-straight,
+        # un-posed configuration), not a deliberately chosen "ready" pose.
+        # Override just the arm joints with the robot class's own canonical
+        # reset_joint_pos (see omnigibson/robots/franka.py's
+        # _default_joint_pos) every reset -- plate/mat/robot-base poses from
+        # the pkl are left untouched. If a different arm pose is wanted,
+        # this is the place to change it (either edit this override, or pass
+        # robot_config["reset_joint_pos"]=<array> in get_task_config() and
+        # reference that here instead of the class default).
+        default_arm_pose = getattr(robot, "reset_joint_pos", None)
+        if default_arm_pose is not None:
+            for arm_name, idx in robot.arm_control_idx.items():
+                robot_joint_positions[idx] = default_arm_pose[idx]
 
         for ctrl_name in ("arm_0", "gripper_0"):
             ctrl = robot.controllers.get(ctrl_name)

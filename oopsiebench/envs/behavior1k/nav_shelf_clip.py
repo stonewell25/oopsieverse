@@ -156,18 +156,23 @@ TASK_OBJECTS = {
 # Placeholder framing pointed roughly at BOOKCASE_NAME -- tune with inspect_scene.py (P also prints camera pose).
 
 # Verified via inspect_scene.py P (2026-07-24).
-VIEWER_CAMERA_POS = [0.650, 4.350, 1.600]
-VIEWER_CAMERA_ORN = [0.5175, -0.2294, -0.4850, 0.6667]
+VIEWER_CAMERA_POS = [0.4079088568687439, 3.7926669120788574, 1.1334723234176636]
+VIEWER_CAMERA_ORN = [0.49168872833251953, 0.1410798877477646, 0.14759859442710876, 0.846494734287262]
 
 EXTERNAL_CAMERA_CONFIGS = {
     "external_sensor_0": {
-        "position": [0.85, 4.15, 1.50],
-        "orientation": [0.0, 0.1305, 0.6469, 0.7509],
+        "position": [0.654559850692749, 4.597009181976318, 0.8775580525398254],
+        "orientation": [0.48328015208244324, 0.3835752010345459, 0.4904218912124634, 0.6154646277427673],
         "horizontal_aperture": 15.0,
     },
     "external_sensor_1": {
-        "position": [-1.60, 5.30, 1.60],
-        "orientation": [0.0, 0.0, 0.7071, 0.7071],
+        "position": [-0.3211096227169037, 4.837942600250244, 1.1671602725982666],
+        "orientation": [0.09887385368347168, 0.0774831548333168, 0.6177701354026794, 0.776260495185852],
+        "horizontal_aperture": 15.0,
+    },
+    "external_sensor_2": {
+        "position": VIEWER_CAMERA_POS,
+        "orientation": VIEWER_CAMERA_ORN,
         "horizontal_aperture": 15.0,
     },
 }
